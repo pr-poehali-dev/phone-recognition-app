@@ -23,11 +23,13 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
   const [detectedCount, setDetectedCount] = useState(0);
   const [fps, setFps] = useState(0);
   const [shotFlash, setShotFlash] = useState(false);
-  const [overlayStyle, setOverlayStyle] = useState<React.CSSProperties>({});
+  // overlay rect inside container (object-contain layout)
+  const [overlayRect, setOverlayRect] = useState({ left: 0, top: 0, width: 0, height: 0 });
+
   const fpsRef = useRef({ frames: 0, last: performance.now() });
   const lastBoxesRef = useRef<DetectedBox[]>([]);
 
-  // Sync overlay position to exactly match the visible video area (object-cover)
+  // Compute exact position/size of video as rendered by object-contain
   const syncOverlay = useCallback(() => {
     const video = videoRef.current;
     const container = containerRef.current;
@@ -38,50 +40,29 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
     const cw = container.clientWidth;
     const ch = container.clientHeight;
 
-    const videoAspect = vw / vh;
-    const containerAspect = cw / ch;
+    const scale = Math.min(cw / vw, ch / vh);
+    const rw = vw * scale;
+    const rh = vh * scale;
+    const left = (cw - rw) / 2;
+    const top = (ch - rh) / 2;
 
-    let renderedW: number, renderedH: number;
-    if (videoAspect > containerAspect) {
-      // Video wider than container → top/bottom are filled, sides cropped
-      renderedH = ch;
-      renderedW = ch * videoAspect;
-    } else {
-      // Video taller than container → sides are filled, top/bottom cropped
-      renderedW = cw;
-      renderedH = cw / videoAspect;
-    }
-
-    const offsetX = (cw - renderedW) / 2;
-    const offsetY = (ch - renderedH) / 2;
-
-    setOverlayStyle({
-      position: "absolute",
-      left: `${offsetX}px`,
-      top: `${offsetY}px`,
-      width: `${renderedW}px`,
-      height: `${renderedH}px`,
-      pointerEvents: "none",
-    });
+    setOverlayRect({ left, top, width: rw, height: rh });
   }, []);
 
   const takeScreenshot = useCallback(() => {
     const video = videoRef.current;
-    const overlay = overlayCanvasRef.current;
-    if (!video || !overlay) return;
+    if (!video) return;
 
-    const w = video.videoWidth || overlay.width;
-    const h = video.videoHeight || overlay.height;
+    const w = video.videoWidth;
+    const h = video.videoHeight;
     const shot = document.createElement("canvas");
     shot.width = w;
     shot.height = h;
     const ctx = shot.getContext("2d");
     if (!ctx) return;
 
-    // Draw video frame
     ctx.drawImage(video, 0, 0, w, h);
 
-    // Draw overlay (boxes) on top — static, no animation
     const boxes = lastBoxesRef.current;
     boxes.forEach((box, idx) => {
       const cx = box.x + box.w / 2;
@@ -124,7 +105,6 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
       ctx.fillText(label, cx, cy + 1);
     });
 
-    // Banner at bottom
     const bannerH = 56;
     ctx.fillStyle = "rgba(0,0,0,0.7)";
     ctx.fillRect(0, h - bannerH, w, bannerH);
@@ -138,11 +118,9 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
     ctx.textAlign = "right";
     ctx.fillText(new Date().toLocaleString("ru-RU"), w - 16, h - bannerH / 2);
 
-    // Flash effect
     setShotFlash(true);
     setTimeout(() => setShotFlash(false), 200);
 
-    // Download
     const link = document.createElement("a");
     const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     link.download = `coinscan-${ts}.jpg`;
@@ -226,10 +204,15 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
     const h = video.videoHeight;
     if (!w || !h) { inferringRef.current = false; return; }
 
-    canvas.width = w;
-    canvas.height = h;
-    overlay.width = w;
-    overlay.height = h;
+    // Only update canvas intrinsic size when video dimensions actually change
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    if (overlay.width !== w || overlay.height !== h) {
+      overlay.width = w;
+      overlay.height = h;
+    }
 
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) { inferringRef.current = false; return; }
@@ -284,15 +267,19 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
     };
   }, [isActive, startCamera]);
 
-  // Sync overlay when video metadata is ready or container resizes
+  // Sync overlay on video metadata load and container resize
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) return;
+    const container = containerRef.current;
+    if (!video || !container) return;
+
     const onMeta = () => syncOverlay();
     video.addEventListener("loadedmetadata", onMeta);
     video.addEventListener("resize", onMeta);
+
     const ro = new ResizeObserver(() => syncOverlay());
-    if (containerRef.current) ro.observe(containerRef.current);
+    ro.observe(container);
+
     return () => {
       video.removeEventListener("loadedmetadata", onMeta);
       video.removeEventListener("resize", onMeta);
@@ -321,9 +308,30 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
 
   return (
     <div ref={containerRef} className="relative w-full h-full bg-black overflow-hidden">
-      <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" playsInline muted autoPlay />
+      {/* Video with object-contain so it never gets cropped */}
+      <video
+        ref={videoRef}
+        className="absolute inset-0 w-full h-full object-contain"
+        playsInline
+        muted
+        autoPlay
+      />
+
+      {/* Hidden processing canvas */}
       <canvas ref={canvasRef} className="hidden" />
-      <canvas ref={overlayCanvasRef} style={overlayStyle} />
+
+      {/* Overlay canvas — same intrinsic size as video, positioned exactly over rendered video area */}
+      <canvas
+        ref={overlayCanvasRef}
+        style={{
+          position: "absolute",
+          left: overlayRect.left,
+          top: overlayRect.top,
+          width: overlayRect.width,
+          height: overlayRect.height,
+          pointerEvents: "none",
+        }}
+      />
 
       {isLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-20">
@@ -367,14 +375,12 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
         </div>
       </div>
 
-      {/* Flash overlay */}
       {shotFlash && (
         <div className="absolute inset-0 bg-white z-30 pointer-events-none animate-shot-flash" />
       )}
 
       <div className="absolute bottom-0 left-0 right-0 h-36 bg-gradient-to-t from-black/70 to-transparent pointer-events-none" />
 
-      {/* Bottom controls */}
       <div className="absolute bottom-10 left-4 right-4 flex items-center justify-between z-10">
         {detectedCount > 0 ? (
           <div className="coin-badge px-4 py-2.5 rounded-3xl flex items-center gap-2">
