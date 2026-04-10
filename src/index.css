@@ -198,6 +198,49 @@
   animation: scale-in 0.2s ease-out;
 }
 
+.settings-sheet {
+  background: #0f0f1a !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.settings-section {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.conf-badge {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.conf-slider [data-radix-slider-track] {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.conf-slider [data-radix-slider-range] {
+  background: linear-gradient(to right, #f59e0b, #f97316);
+}
+
+.conf-slider [data-radix-slider-thumb] {
+  background: #fbbf24;
+  border-color: #f97316;
+  width: 22px;
+  height: 22px;
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.5);
+}
+
+.iou-slider [data-radix-slider-range] {
+  background: linear-gradient(to right, #38bdf8, #818cf8);
+}
+
+.iou-slider [data-radix-slider-thumb] {
+  background: #38bdf8;
+  border-color: #818cf8;
+  width: 22px;
+  height: 22px;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.45);
+}
+
 .model-drop-zone {
   background: rgba(255, 255, 255, 0.03);
   border: 2px dashed rgba(245, 158, 11, 0.25);

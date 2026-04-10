@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import CameraView from "@/components/CameraView";
 import StatsView from "@/components/StatsView";
 import ModelLoader from "@/components/ModelLoader";
+import SettingsSheet from "@/components/SettingsSheet";
 import { useOnnxModel } from "@/hooks/useOnnxModel";
 import Icon from "@/components/ui/icon";
 import type { DetectedBox } from "@/hooks/useOnnxModel";
@@ -19,10 +20,11 @@ export default function Index() {
   const [totalDetections, setTotalDetections] = useState(0);
   const [peakCount, setPeakCount] = useState(0);
   const [appReady, setAppReady] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const lastLogRef = useRef<number>(0);
   const lastCountRef = useRef<number>(0);
 
-  const { isReady, isLoading, modelName, error, loadFromFile, loadFromCache, clearModel, runInference } = useOnnxModel();
+  const { isReady, isLoading, modelName, error, loadFromFile, loadFromCache, clearModel, runInference, confThresh, setConfThresh, iouThresh, setIouThresh } = useOnnxModel();
 
   useEffect(() => {
     loadFromCache().then(() => setAppReady(true));
@@ -82,11 +84,11 @@ export default function Index() {
             </div>
           )}
           <button
-            onClick={clearModel}
-            className="glass-badge w-9 h-9 rounded-full flex items-center justify-center text-gray-500 hover:text-red-400 transition-colors"
-            title="Сменить модель"
+            onClick={() => setSettingsOpen(true)}
+            className="glass-badge w-9 h-9 rounded-full flex items-center justify-center text-gray-400 hover:text-white transition-colors"
+            title="Настройки"
           >
-            <Icon name="Settings" size={16} />
+            <Icon name="Settings2" size={16} />
           </button>
         </div>
       </header>
@@ -109,6 +111,17 @@ export default function Index() {
           </div>
         )}
       </main>
+
+      <SettingsSheet
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        modelName={modelName}
+        confThresh={confThresh}
+        setConfThresh={setConfThresh}
+        iouThresh={iouThresh}
+        setIouThresh={setIouThresh}
+        onChangeModel={clearModel}
+      />
 
       <nav className="bottom-nav flex items-center justify-around px-6 py-3 z-20 relative">
         <button

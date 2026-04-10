@@ -52,6 +52,9 @@ export interface DetectedBox {
   id: number;
 }
 
+const CONF_STORAGE_KEY = "coinscan-conf-thresh";
+const IOU_STORAGE_KEY = "coinscan-iou-thresh";
+
 export function useOnnxModel() {
   const sessionRef = useRef<ort.InferenceSession | null>(null);
   const [isReady, setIsReady] = useState(false);
@@ -59,6 +62,28 @@ export function useOnnxModel() {
   const [modelName, setModelName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const boxIdRef = useRef(0);
+  const [confThresh, setConfThreshState] = useState<number>(() => {
+    const saved = localStorage.getItem(CONF_STORAGE_KEY);
+    return saved ? parseFloat(saved) : 0.35;
+  });
+  const [iouThresh, setIouThreshState] = useState<number>(() => {
+    const saved = localStorage.getItem(IOU_STORAGE_KEY);
+    return saved ? parseFloat(saved) : 0.45;
+  });
+  const confThreshRef = useRef(confThresh);
+  const iouThreshRef = useRef(iouThresh);
+
+  const setConfThresh = useCallback((v: number) => {
+    confThreshRef.current = v;
+    setConfThreshState(v);
+    localStorage.setItem(CONF_STORAGE_KEY, String(v));
+  }, []);
+
+  const setIouThresh = useCallback((v: number) => {
+    iouThreshRef.current = v;
+    setIouThreshState(v);
+    localStorage.setItem(IOU_STORAGE_KEY, String(v));
+  }, []);
 
   const initSession = useCallback(async (buffer: ArrayBuffer) => {
     ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.3/dist/";
@@ -145,8 +170,8 @@ export function useOnnxModel() {
     const outputShape = results[outputName].dims;
 
     const boxes: DetectedBox[] = [];
-    const CONF_THRESH = 0.35;
-    const IOU_THRESH = 0.45;
+    const CONF_THRESH = confThreshRef.current;
+    const IOU_THRESH = iouThreshRef.current;
 
     // YOLOv8 output: [1, 5, num_detections] → transpose to [num_det, 5]
     // or [1, num_det, 5] — handle both
@@ -217,7 +242,7 @@ export function useOnnxModel() {
     return boxes;
   }, []);
 
-  return { isReady, isLoading, modelName, error, loadFromFile, loadFromCache, clearModel, runInference };
+  return { isReady, isLoading, modelName, error, loadFromFile, loadFromCache, clearModel, runInference, confThresh, setConfThresh, iouThresh, setIouThresh };
 }
 
 function iou(a: DetectedBox, b: DetectedBox): number {
