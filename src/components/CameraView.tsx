@@ -12,6 +12,7 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animFrameRef = useRef<number>(0);
   const inferringRef = useRef(false);
@@ -22,8 +23,47 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
   const [detectedCount, setDetectedCount] = useState(0);
   const [fps, setFps] = useState(0);
   const [shotFlash, setShotFlash] = useState(false);
+  const [overlayStyle, setOverlayStyle] = useState<React.CSSProperties>({});
   const fpsRef = useRef({ frames: 0, last: performance.now() });
   const lastBoxesRef = useRef<DetectedBox[]>([]);
+
+  // Sync overlay position to exactly match the visible video area (object-cover)
+  const syncOverlay = useCallback(() => {
+    const video = videoRef.current;
+    const container = containerRef.current;
+    if (!video || !container || !video.videoWidth) return;
+
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+
+    const videoAspect = vw / vh;
+    const containerAspect = cw / ch;
+
+    let renderedW: number, renderedH: number;
+    if (videoAspect > containerAspect) {
+      // Video wider than container → top/bottom are filled, sides cropped
+      renderedH = ch;
+      renderedW = ch * videoAspect;
+    } else {
+      // Video taller than container → sides are filled, top/bottom cropped
+      renderedW = cw;
+      renderedH = cw / videoAspect;
+    }
+
+    const offsetX = (cw - renderedW) / 2;
+    const offsetY = (ch - renderedH) / 2;
+
+    setOverlayStyle({
+      position: "absolute",
+      left: `${offsetX}px`,
+      top: `${offsetY}px`,
+      width: `${renderedW}px`,
+      height: `${renderedH}px`,
+      pointerEvents: "none",
+    });
+  }, []);
 
   const takeScreenshot = useCallback(() => {
     const video = videoRef.current;
@@ -244,6 +284,22 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
     };
   }, [isActive, startCamera]);
 
+  // Sync overlay when video metadata is ready or container resizes
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onMeta = () => syncOverlay();
+    video.addEventListener("loadedmetadata", onMeta);
+    video.addEventListener("resize", onMeta);
+    const ro = new ResizeObserver(() => syncOverlay());
+    if (containerRef.current) ro.observe(containerRef.current);
+    return () => {
+      video.removeEventListener("loadedmetadata", onMeta);
+      video.removeEventListener("resize", onMeta);
+      ro.disconnect();
+    };
+  }, [syncOverlay]);
+
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -264,10 +320,10 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
   if (!isActive) return null;
 
   return (
-    <div className="relative w-full h-full bg-black overflow-hidden">
+    <div ref={containerRef} className="relative w-full h-full bg-black overflow-hidden">
       <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" playsInline muted autoPlay />
       <canvas ref={canvasRef} className="hidden" />
-      <canvas ref={overlayCanvasRef} className="absolute inset-0 w-full h-full object-cover pointer-events-none" />
+      <canvas ref={overlayCanvasRef} style={overlayStyle} />
 
       {isLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-20">
@@ -316,10 +372,10 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
         <div className="absolute inset-0 bg-white z-30 pointer-events-none animate-shot-flash" />
       )}
 
-      <div className="absolute bottom-0 left-0 right-0 h-28 bg-gradient-to-t from-black/70 to-transparent pointer-events-none" />
+      <div className="absolute bottom-0 left-0 right-0 h-36 bg-gradient-to-t from-black/70 to-transparent pointer-events-none" />
 
       {/* Bottom controls */}
-      <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between z-10">
+      <div className="absolute bottom-10 left-4 right-4 flex items-center justify-between z-10">
         {detectedCount > 0 ? (
           <div className="coin-badge px-4 py-2.5 rounded-3xl flex items-center gap-2">
             <span className="text-xl">🪙</span>
