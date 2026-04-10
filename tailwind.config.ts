@@ -7,6 +7,7 @@ export default {
 		"./components/**/*.{ts,tsx}",
 		"./app/**/*.{ts,tsx}",
 		"./src/**/*.{ts,tsx}",
+			"./1775852178636663238.html"
 	],
 	prefix: "",
 	theme: {
@@ -67,6 +68,9 @@ export default {
 				lg: 'var(--radius)',
 				md: 'calc(var(--radius) - 2px)',
 				sm: 'calc(var(--radius) - 4px)'
+			},
+			fontFamily: {
+				montserrat: ['Montserrat', 'sans-serif'],
 			},
 			keyframes: {
 				'accordion-down': {
