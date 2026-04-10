@@ -21,7 +21,94 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
   const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
   const [detectedCount, setDetectedCount] = useState(0);
   const [fps, setFps] = useState(0);
+  const [shotFlash, setShotFlash] = useState(false);
   const fpsRef = useRef({ frames: 0, last: performance.now() });
+  const lastBoxesRef = useRef<DetectedBox[]>([]);
+
+  const takeScreenshot = useCallback(() => {
+    const video = videoRef.current;
+    const overlay = overlayCanvasRef.current;
+    if (!video || !overlay) return;
+
+    const w = video.videoWidth || overlay.width;
+    const h = video.videoHeight || overlay.height;
+    const shot = document.createElement("canvas");
+    shot.width = w;
+    shot.height = h;
+    const ctx = shot.getContext("2d");
+    if (!ctx) return;
+
+    // Draw video frame
+    ctx.drawImage(video, 0, 0, w, h);
+
+    // Draw overlay (boxes) on top — static, no animation
+    const boxes = lastBoxesRef.current;
+    boxes.forEach((box, idx) => {
+      const cx = box.x + box.w / 2;
+      const cy = box.y + box.h / 2;
+      const rx = box.w / 2;
+      const ry = box.h / 2;
+
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx + 5, ry + 5, 0, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(0,255,200,${0.3 * box.confidence})`;
+      ctx.lineWidth = 9;
+      ctx.stroke();
+
+      const grad = ctx.createRadialGradient(cx - rx * 0.3, cy - ry * 0.3, rx * 0.05, cx, cy, rx);
+      grad.addColorStop(0, `rgba(255,220,50,${0.14 * box.confidence})`);
+      grad.addColorStop(1, `rgba(255,140,0,${0.05 * box.confidence})`);
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255,215,0,${0.95 * box.confidence})`;
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([9, 5]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const label = `${idx + 1}`;
+      const lw = 26 + label.length * 4;
+      ctx.fillStyle = "rgba(0,0,0,0.65)";
+      ctx.beginPath();
+      ctx.roundRect(cx - lw / 2, cy - 11, lw, 22, 5);
+      ctx.fill();
+      ctx.fillStyle = "#FFD700";
+      ctx.font = "bold 13px Montserrat, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, cx, cy + 1);
+    });
+
+    // Banner at bottom
+    const bannerH = 56;
+    ctx.fillStyle = "rgba(0,0,0,0.7)";
+    ctx.fillRect(0, h - bannerH, w, bannerH);
+    ctx.fillStyle = "#FFD700";
+    ctx.font = "bold 22px Montserrat, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`🪙 Монет: ${boxes.length}`, 20, h - bannerH / 2);
+    ctx.fillStyle = "rgba(255,255,255,0.4)";
+    ctx.font = "13px Montserrat, sans-serif";
+    ctx.textAlign = "right";
+    ctx.fillText(new Date().toLocaleString("ru-RU"), w - 16, h - bannerH / 2);
+
+    // Flash effect
+    setShotFlash(true);
+    setTimeout(() => setShotFlash(false), 200);
+
+    // Download
+    const link = document.createElement("a");
+    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    link.download = `coinscan-${ts}.jpg`;
+    link.href = shot.toDataURL("image/jpeg", 0.92);
+    link.click();
+  }, []);
 
   const drawBoxes = useCallback((boxes: DetectedBox[], overlay: HTMLCanvasElement) => {
     const octx = overlay.getContext("2d");
@@ -112,6 +199,7 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
 
     try {
       const boxes = await runInference(imageData);
+      lastBoxesRef.current = boxes;
       drawBoxes(boxes, overlay);
       setDetectedCount(boxes.length);
       onCoinsDetected(boxes, Date.now());
@@ -223,17 +311,35 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
         </div>
       </div>
 
-      <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-black/60 to-transparent pointer-events-none" />
-
-      {detectedCount > 0 && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10">
-          <div className="coin-badge px-6 py-3 rounded-3xl flex items-center gap-3">
-            <span className="text-2xl">🪙</span>
-            <span className="text-white font-montserrat font-black text-xl">{detectedCount}</span>
-            <span className="text-amber-300 font-montserrat text-sm">монет в кадре</span>
-          </div>
-        </div>
+      {/* Flash overlay */}
+      {shotFlash && (
+        <div className="absolute inset-0 bg-white z-30 pointer-events-none animate-shot-flash" />
       )}
+
+      <div className="absolute bottom-0 left-0 right-0 h-28 bg-gradient-to-t from-black/70 to-transparent pointer-events-none" />
+
+      {/* Bottom controls */}
+      <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between z-10">
+        {detectedCount > 0 ? (
+          <div className="coin-badge px-4 py-2.5 rounded-3xl flex items-center gap-2">
+            <span className="text-xl">🪙</span>
+            <span className="text-white font-montserrat font-black text-lg">{detectedCount}</span>
+            <span className="text-amber-300 font-montserrat text-xs">монет</span>
+          </div>
+        ) : (
+          <div />
+        )}
+
+        <button
+          onClick={takeScreenshot}
+          className="shot-btn w-16 h-16 rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-transform duration-100"
+          title="Сохранить скриншот"
+        >
+          <div className="shot-btn-inner w-12 h-12 rounded-full flex items-center justify-center">
+            <Icon name="Camera" size={22} />
+          </div>
+        </button>
+      </div>
     </div>
   );
 }
