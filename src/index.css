@@ -197,3 +197,16 @@
 .animate-scale-in {
   animation: scale-in 0.2s ease-out;
 }
+
+.model-drop-zone {
+  background: rgba(255, 255, 255, 0.03);
+  border: 2px dashed rgba(245, 158, 11, 0.25);
+  transition:
+    border-color 0.2s,
+    background 0.2s;
+}
+
+.model-drop-zone:hover {
+  border-color: rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.05);
+}

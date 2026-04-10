@@ -1,207 +1,139 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import Icon from "@/components/ui/icon";
-
-interface Coin {
-  x: number;
-  y: number;
-  radius: number;
-  confidence: number;
-  id: number;
-}
+import type { DetectedBox } from "@/hooks/useOnnxModel";
 
 interface CameraViewProps {
-  onCoinsDetected: (coins: Coin[], timestamp: number) => void;
+  onCoinsDetected: (boxes: DetectedBox[], timestamp: number) => void;
   isActive: boolean;
+  runInference: (imageData: ImageData) => Promise<DetectedBox[]>;
 }
 
-export default function CameraView({ onCoinsDetected, isActive }: CameraViewProps) {
+export default function CameraView({ onCoinsDetected, isActive, runInference }: CameraViewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animFrameRef = useRef<number>(0);
-  const coinIdRef = useRef(0);
+  const inferringRef = useRef(false);
 
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
   const [detectedCount, setDetectedCount] = useState(0);
+  const [fps, setFps] = useState(0);
+  const fpsRef = useRef({ frames: 0, last: performance.now() });
 
-  const detectCoins = useCallback((video: HTMLVideoElement, canvas: HTMLCanvasElement, overlay: HTMLCanvasElement) => {
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const drawBoxes = useCallback((boxes: DetectedBox[], overlay: HTMLCanvasElement) => {
     const octx = overlay.getContext("2d");
-    if (!ctx || !octx) return;
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    overlay.width = video.videoWidth;
-    overlay.height = video.videoHeight;
-
-    ctx.drawImage(video, 0, 0);
-
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imageData.data;
-    const w = canvas.width;
-    const h = canvas.height;
-
-    const gray = new Uint8Array(w * h);
-    for (let i = 0; i < w * h; i++) {
-      gray[i] = Math.round(0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2]);
-    }
-
-    const blurred = new Uint8Array(w * h);
-    const ksize = 3;
-    for (let y = ksize; y < h - ksize; y++) {
-      for (let x = ksize; x < w - ksize; x++) {
-        let sum = 0, count = 0;
-        for (let dy = -ksize; dy <= ksize; dy++) {
-          for (let dx = -ksize; dx <= ksize; dx++) {
-            sum += gray[(y + dy) * w + (x + dx)];
-            count++;
-          }
-        }
-        blurred[y * w + x] = sum / count;
-      }
-    }
-
-    const edges = new Uint8Array(w * h);
-    for (let y = 1; y < h - 1; y++) {
-      for (let x = 1; x < w - 1; x++) {
-        const gx = -blurred[(y - 1) * w + (x - 1)] + blurred[(y - 1) * w + (x + 1)]
-          - 2 * blurred[y * w + (x - 1)] + 2 * blurred[y * w + (x + 1)]
-          - blurred[(y + 1) * w + (x - 1)] + blurred[(y + 1) * w + (x + 1)];
-        const gy = -blurred[(y - 1) * w + (x - 1)] - 2 * blurred[(y - 1) * w + x] - blurred[(y - 1) * w + (x + 1)]
-          + blurred[(y + 1) * w + (x - 1)] + 2 * blurred[(y + 1) * w + x] + blurred[(y + 1) * w + (x + 1)];
-        edges[y * w + x] = Math.min(255, Math.sqrt(gx * gx + gy * gy));
-      }
-    }
-
-    const minR = Math.round(Math.min(w, h) * 0.04);
-    const maxR = Math.round(Math.min(w, h) * 0.18);
-    const threshold = 60;
-    const accum: number[] = new Array(w * h).fill(0);
-
-    for (let y = 1; y < h - 1; y++) {
-      for (let x = 1; x < w - 1; x++) {
-        if (edges[y * w + x] < threshold) continue;
-        for (let r = minR; r <= maxR; r += 2) {
-          const steps = Math.round(2 * Math.PI * r / 2);
-          for (let s = 0; s < steps; s++) {
-            const angle = (2 * Math.PI * s) / steps;
-            const cx = Math.round(x - r * Math.cos(angle));
-            const cy = Math.round(y - r * Math.sin(angle));
-            if (cx >= 0 && cx < w && cy >= 0 && cy < h) {
-              accum[cy * w + cx]++;
-            }
-          }
-        }
-      }
-    }
-
-    const coins: Coin[] = [];
-    const minVotes = 25;
-    const used = new Uint8Array(w * h);
-
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        if (accum[y * w + x] < minVotes || used[y * w + x]) continue;
-        let maxV = accum[y * w + x];
-        let bx = x, by = y;
-        for (let dy = -minR; dy <= minR; dy++) {
-          for (let dx = -minR; dx <= minR; dx++) {
-            const nx = x + dx, ny = y + dy;
-            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
-            if (accum[ny * w + nx] > maxV) {
-              maxV = accum[ny * w + nx];
-              bx = nx; by = ny;
-            }
-          }
-        }
-        for (let dy = -minR; dy <= minR; dy++) {
-          for (let dx = -minR; dx <= minR; dx++) {
-            const nx = bx + dx, ny = by + dy;
-            if (nx >= 0 && nx < w && ny >= 0 && ny < h) used[ny * w + nx] = 1;
-          }
-        }
-
-        let bestR = minR, bestScore = 0;
-        for (let r = minR; r <= maxR; r += 2) {
-          let score = 0;
-          const steps = Math.round(2 * Math.PI * r / 2);
-          for (let s = 0; s < steps; s++) {
-            const angle = (2 * Math.PI * s) / steps;
-            const ex = Math.round(bx + r * Math.cos(angle));
-            const ey = Math.round(by + r * Math.sin(angle));
-            if (ex >= 0 && ex < w && ey >= 0 && ey < h && edges[ey * w + ex] > threshold) score++;
-          }
-          if (score > bestScore) { bestScore = score; bestR = r; }
-        }
-
-        if (bestScore > 8) {
-          const tooClose = coins.some(c => {
-            const dx = c.x - bx, dy = c.y - by;
-            return Math.sqrt(dx * dx + dy * dy) < (c.radius + bestR) * 0.8;
-          });
-          if (!tooClose) {
-            coins.push({ x: bx, y: by, radius: bestR, confidence: Math.min(1, bestScore / 30), id: coinIdRef.current++ });
-          }
-        }
-      }
-    }
-
+    if (!octx) return;
+    const w = overlay.width;
+    const h = overlay.height;
     octx.clearRect(0, 0, w, h);
     const now = Date.now();
 
-    coins.forEach((coin, idx) => {
-      const pulse = 0.85 + 0.15 * Math.sin(now * 0.004 + idx);
-      const r = coin.radius * pulse;
+    boxes.forEach((box, idx) => {
+      const pulse = 0.92 + 0.08 * Math.sin(now * 0.005 + idx);
+      const cx = box.x + box.w / 2;
+      const cy = box.y + box.h / 2;
+      const rx = (box.w / 2) * pulse;
+      const ry = (box.h / 2) * pulse;
 
       octx.beginPath();
-      octx.arc(coin.x, coin.y, r + 4, 0, Math.PI * 2);
-      octx.strokeStyle = `rgba(0, 255, 200, ${0.3 * coin.confidence})`;
-      octx.lineWidth = 8;
+      octx.ellipse(cx, cy, rx + 6, ry + 6, 0, 0, Math.PI * 2);
+      octx.strokeStyle = `rgba(0, 255, 200, ${0.25 * box.confidence})`;
+      octx.lineWidth = 10;
       octx.stroke();
 
-      const grad = octx.createRadialGradient(coin.x - r * 0.3, coin.y - r * 0.3, r * 0.1, coin.x, coin.y, r);
-      grad.addColorStop(0, `rgba(255, 220, 50, ${0.15 * coin.confidence})`);
-      grad.addColorStop(1, `rgba(255, 140, 0, ${0.05 * coin.confidence})`);
+      const grad = octx.createRadialGradient(cx - rx * 0.3, cy - ry * 0.3, rx * 0.05, cx, cy, rx);
+      grad.addColorStop(0, `rgba(255, 220, 50, ${0.12 * box.confidence})`);
+      grad.addColorStop(1, `rgba(255, 140, 0, ${0.04 * box.confidence})`);
       octx.beginPath();
-      octx.arc(coin.x, coin.y, r, 0, Math.PI * 2);
+      octx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
       octx.fillStyle = grad;
       octx.fill();
 
       octx.beginPath();
-      octx.arc(coin.x, coin.y, r, 0, Math.PI * 2);
-      octx.strokeStyle = `rgba(255, 220, 50, ${0.9 * coin.confidence})`;
-      octx.lineWidth = 3;
-      octx.setLineDash([8, 4]);
-      octx.lineDashOffset = -(now * 0.05);
+      octx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      octx.strokeStyle = `rgba(255, 215, 0, ${0.95 * box.confidence})`;
+      octx.lineWidth = 2.5;
+      octx.setLineDash([9, 5]);
+      octx.lineDashOffset = -(now * 0.06);
       octx.stroke();
       octx.setLineDash([]);
 
-      octx.fillStyle = "rgba(0,0,0,0.6)";
+      const label = `${idx + 1}`;
+      const lw = 26 + label.length * 4;
+      octx.fillStyle = "rgba(0,0,0,0.65)";
       octx.beginPath();
-      octx.roundRect(coin.x - 14, coin.y - 12, 28, 22, 4);
+      octx.roundRect(cx - lw / 2, cy - 11, lw, 22, 5);
       octx.fill();
       octx.fillStyle = "#FFD700";
       octx.font = "bold 13px Montserrat, sans-serif";
       octx.textAlign = "center";
       octx.textBaseline = "middle";
-      octx.fillText(`${idx + 1}`, coin.x, coin.y + 1);
-    });
+      octx.fillText(label, cx, cy + 1);
 
-    setDetectedCount(coins.length);
-    onCoinsDetected(coins, now);
-  }, [onCoinsDetected]);
+      const barW = Math.min(box.w * 0.7, 60);
+      const barX = cx - barW / 2;
+      const barY = box.y + box.h + 6;
+      octx.fillStyle = "rgba(0,0,0,0.4)";
+      octx.beginPath();
+      octx.roundRect(barX, barY, barW, 5, 3);
+      octx.fill();
+      octx.fillStyle = `hsl(${box.confidence * 120}, 100%, 55%)`;
+      octx.beginPath();
+      octx.roundRect(barX, barY, barW * box.confidence, 5, 3);
+      octx.fill();
+    });
+  }, []);
+
+  const processFrame = useCallback(async (
+    video: HTMLVideoElement,
+    canvas: HTMLCanvasElement,
+    overlay: HTMLCanvasElement,
+  ) => {
+    if (inferringRef.current) return;
+    inferringRef.current = true;
+
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    if (!w || !h) { inferringRef.current = false; return; }
+
+    canvas.width = w;
+    canvas.height = h;
+    overlay.width = w;
+    overlay.height = h;
+
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) { inferringRef.current = false; return; }
+
+    ctx.drawImage(video, 0, 0);
+    const imageData = ctx.getImageData(0, 0, w, h);
+
+    try {
+      const boxes = await runInference(imageData);
+      drawBoxes(boxes, overlay);
+      setDetectedCount(boxes.length);
+      onCoinsDetected(boxes, Date.now());
+
+      fpsRef.current.frames++;
+      const now = performance.now();
+      if (now - fpsRef.current.last >= 1000) {
+        setFps(fpsRef.current.frames);
+        fpsRef.current.frames = 0;
+        fpsRef.current.last = now;
+      }
+    } finally {
+      inferringRef.current = false;
+    }
+  }, [runInference, drawBoxes, onCoinsDetected]);
 
   const startCamera = useCallback(async () => {
     setIsLoading(true);
     try {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(t => t.stop());
-      }
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 } }
+        video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 } },
       });
       streamRef.current = stream;
       if (videoRef.current) {
@@ -219,7 +151,7 @@ export default function CameraView({ onCoinsDetected, isActive }: CameraViewProp
   useEffect(() => {
     if (isActive) startCamera();
     return () => {
-      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current?.getTracks().forEach(t => t.stop());
       cancelAnimationFrame(animFrameRef.current);
     };
   }, [isActive, startCamera]);
@@ -234,38 +166,25 @@ export default function CameraView({ onCoinsDetected, isActive }: CameraViewProp
     const loop = () => {
       animFrameRef.current = requestAnimationFrame(loop);
       frameCount++;
-      if (frameCount % 3 !== 0) return;
-      if (video.readyState >= 2) detectCoins(video, canvas, overlay);
+      if (frameCount % 2 !== 0) return;
+      if (video.readyState >= 2) processFrame(video, canvas, overlay);
     };
     animFrameRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animFrameRef.current);
-  }, [detectCoins]);
-
-  const switchCamera = () => {
-    setFacingMode(f => f === "environment" ? "user" : "environment");
-  };
+  }, [processFrame]);
 
   if (!isActive) return null;
 
   return (
     <div className="relative w-full h-full bg-black overflow-hidden">
-      <video
-        ref={videoRef}
-        className="absolute inset-0 w-full h-full object-cover"
-        playsInline
-        muted
-        autoPlay
-      />
+      <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" playsInline muted autoPlay />
       <canvas ref={canvasRef} className="hidden" />
-      <canvas
-        ref={overlayCanvasRef}
-        className="absolute inset-0 w-full h-full object-cover pointer-events-none"
-      />
+      <canvas ref={overlayCanvasRef} className="absolute inset-0 w-full h-full object-cover pointer-events-none" />
 
       {isLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-20">
           <div className="flex flex-col items-center gap-4">
-            <div className="w-14 h-14 rounded-full border-4 border-transparent border-t-[#FFD700] animate-spin" />
+            <div className="w-14 h-14 rounded-full border-4 border-transparent border-t-amber-400 animate-spin" />
             <p className="text-white font-montserrat text-lg">Запуск камеры...</p>
           </div>
         </div>
@@ -286,17 +205,22 @@ export default function CameraView({ onCoinsDetected, isActive }: CameraViewProp
 
       <div className="absolute top-4 left-4 right-4 flex justify-between items-center z-10">
         <div className="glass-badge flex items-center gap-2 px-4 py-2 rounded-2xl">
-          <div className={`w-2.5 h-2.5 rounded-full ${detectedCount > 0 ? "bg-green-400 animate-pulse" : "bg-gray-400"}`} />
+          <div className={`w-2.5 h-2.5 rounded-full ${detectedCount > 0 ? "bg-green-400 animate-pulse" : "bg-gray-500"}`} />
           <span className="text-white font-montserrat text-sm font-semibold">
             {detectedCount > 0 ? `${detectedCount} монет` : "Наведите камеру"}
           </span>
         </div>
-        <button
-          onClick={switchCamera}
-          className="glass-badge w-10 h-10 rounded-full flex items-center justify-center text-white"
-        >
-          <Icon name="RefreshCw" size={18} />
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="glass-badge px-3 py-2 rounded-2xl">
+            <span className="text-gray-400 font-montserrat text-xs">{fps} fps</span>
+          </div>
+          <button
+            onClick={() => setFacingMode(f => f === "environment" ? "user" : "environment")}
+            className="glass-badge w-10 h-10 rounded-full flex items-center justify-center text-white"
+          >
+            <Icon name="RefreshCw" size={18} />
+          </button>
+        </div>
       </div>
 
       <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-black/60 to-transparent pointer-events-none" />

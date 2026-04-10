@@ -1,7 +1,10 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import CameraView from "@/components/CameraView";
 import StatsView from "@/components/StatsView";
+import ModelLoader from "@/components/ModelLoader";
+import { useOnnxModel } from "@/hooks/useOnnxModel";
 import Icon from "@/components/ui/icon";
+import type { DetectedBox } from "@/hooks/useOnnxModel";
 
 type Tab = "camera" | "stats";
 
@@ -10,32 +13,31 @@ interface SessionRecord {
   count: number;
 }
 
-interface Coin {
-  x: number;
-  y: number;
-  radius: number;
-  confidence: number;
-  id: number;
-}
-
 export default function Index() {
   const [tab, setTab] = useState<Tab>("camera");
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [totalDetections, setTotalDetections] = useState(0);
   const [peakCount, setPeakCount] = useState(0);
+  const [appReady, setAppReady] = useState(false);
   const lastLogRef = useRef<number>(0);
   const lastCountRef = useRef<number>(0);
 
-  const handleCoinsDetected = useCallback((coins: Coin[], ts: number) => {
-    if (ts - lastLogRef.current < 2000) return;
-    if (coins.length === 0) return;
-    if (coins.length === lastCountRef.current && ts - lastLogRef.current < 5000) return;
-    lastLogRef.current = ts;
-    lastCountRef.current = coins.length;
+  const { isReady, isLoading, modelName, error, loadFromFile, loadFromCache, clearModel, runInference } = useOnnxModel();
 
-    setSessions(prev => [...prev, { timestamp: ts, count: coins.length }]);
-    setTotalDetections(prev => prev + coins.length);
-    setPeakCount(prev => Math.max(prev, coins.length));
+  useEffect(() => {
+    loadFromCache().then(() => setAppReady(true));
+  }, [loadFromCache]);
+
+  const handleCoinsDetected = useCallback((boxes: DetectedBox[], ts: number) => {
+    if (ts - lastLogRef.current < 2000) return;
+    if (boxes.length === 0) return;
+    if (boxes.length === lastCountRef.current && ts - lastLogRef.current < 5000) return;
+    lastLogRef.current = ts;
+    lastCountRef.current = boxes.length;
+
+    setSessions(prev => [...prev, { timestamp: ts, count: boxes.length }]);
+    setTotalDetections(prev => prev + boxes.length);
+    setPeakCount(prev => Math.max(prev, boxes.length));
   }, []);
 
   const handleClear = () => {
@@ -46,6 +48,20 @@ export default function Index() {
     lastCountRef.current = 0;
   };
 
+  if (!appReady) {
+    return (
+      <div className="app-root flex flex-col h-screen items-center justify-center gap-5">
+        <div className="coin-logo w-20 h-20 rounded-3xl flex items-center justify-center text-4xl">🪙</div>
+        <div className="w-10 h-10 rounded-full border-4 border-transparent border-t-amber-400 animate-spin" />
+        <p className="font-montserrat text-gray-500 text-sm">Загрузка...</p>
+      </div>
+    );
+  }
+
+  if (!isReady) {
+    return <ModelLoader onModelLoaded={loadFromFile} isLoading={isLoading} error={error} />;
+  }
+
   return (
     <div className="app-root flex flex-col h-screen overflow-hidden">
       <header className="flex items-center px-5 pt-4 pb-3 z-20 relative">
@@ -53,20 +69,35 @@ export default function Index() {
           <div className="coin-logo w-10 h-10 rounded-2xl flex items-center justify-center text-xl">🪙</div>
           <div>
             <h1 className="font-montserrat font-black text-white text-lg leading-none">CoinScan</h1>
-            <p className="font-montserrat text-xs text-gray-400 leading-none mt-0.5">Детектор монет</p>
+            <p className="font-montserrat text-xs text-gray-500 leading-none mt-0.5 max-w-[160px] truncate" title={modelName ?? ""}>
+              {modelName ?? "Детектор монет"}
+            </p>
           </div>
         </div>
-        {tab === "camera" && (
-          <div className="live-badge flex items-center gap-1.5 px-3 py-1.5 rounded-full">
-            <div className="w-2 h-2 rounded-full bg-red-400 animate-pulse" />
-            <span className="font-montserrat text-xs text-white font-semibold">LIVE</span>
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {tab === "camera" && (
+            <div className="live-badge flex items-center gap-1.5 px-3 py-1.5 rounded-full">
+              <div className="w-2 h-2 rounded-full bg-red-400 animate-pulse" />
+              <span className="font-montserrat text-xs text-white font-semibold">LIVE</span>
+            </div>
+          )}
+          <button
+            onClick={clearModel}
+            className="glass-badge w-9 h-9 rounded-full flex items-center justify-center text-gray-500 hover:text-red-400 transition-colors"
+            title="Сменить модель"
+          >
+            <Icon name="Settings" size={16} />
+          </button>
+        </div>
       </header>
 
       <main className="flex-1 relative overflow-hidden">
         {tab === "camera" ? (
-          <CameraView onCoinsDetected={handleCoinsDetected} isActive={tab === "camera"} />
+          <CameraView
+            onCoinsDetected={handleCoinsDetected}
+            isActive={tab === "camera"}
+            runInference={runInference}
+          />
         ) : (
           <div className="h-full">
             <StatsView
