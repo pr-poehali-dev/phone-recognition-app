@@ -97,6 +97,7 @@ export default function Index() {
         {tab === "camera" ? (
           <CameraView
             onCoinsDetected={handleCoinsDetected}
+            onResetCount={handleClear}
             isActive={tab === "camera"}
             runInference={runInference}
           />

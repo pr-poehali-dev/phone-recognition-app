@@ -4,11 +4,12 @@ import type { DetectedBox } from "@/hooks/useOnnxModel";
 
 interface CameraViewProps {
   onCoinsDetected: (boxes: DetectedBox[], timestamp: number) => void;
+  onResetCount?: () => void;
   isActive: boolean;
   runInference: (imageData: ImageData) => Promise<DetectedBox[]>;
 }
 
-export default function CameraView({ onCoinsDetected, isActive, runInference }: CameraViewProps) {
+export default function CameraView({ onCoinsDetected, onResetCount, isActive, runInference }: CameraViewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -23,36 +24,28 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
   const [detectedCount, setDetectedCount] = useState(0);
   const [fps, setFps] = useState(0);
   const [shotFlash, setShotFlash] = useState(false);
-  // overlay rect inside container (object-contain layout)
   const [overlayRect, setOverlayRect] = useState({ left: 0, top: 0, width: 0, height: 0 });
 
   const fpsRef = useRef({ frames: 0, last: performance.now() });
   const lastBoxesRef = useRef<DetectedBox[]>([]);
 
-  // Compute exact position/size of video as rendered by object-contain
   const syncOverlay = useCallback(() => {
     const video = videoRef.current;
     const container = containerRef.current;
     if (!video || !container || !video.videoWidth) return;
-
     const vw = video.videoWidth;
     const vh = video.videoHeight;
     const cw = container.clientWidth;
     const ch = container.clientHeight;
-
     const scale = Math.min(cw / vw, ch / vh);
     const rw = vw * scale;
     const rh = vh * scale;
-    const left = (cw - rw) / 2;
-    const top = (ch - rh) / 2;
-
-    setOverlayRect({ left, top, width: rw, height: rh });
+    setOverlayRect({ left: (cw - rw) / 2, top: (ch - rh) / 2, width: rw, height: rh });
   }, []);
 
   const takeScreenshot = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
-
     const w = video.videoWidth;
     const h = video.videoHeight;
     const shot = document.createElement("canvas");
@@ -65,44 +58,41 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
 
     const boxes = lastBoxesRef.current;
     boxes.forEach((box, idx) => {
-      const cx = box.x + box.w / 2;
-      const cy = box.y + box.h / 2;
-      const rx = box.w / 2;
-      const ry = box.h / 2;
+      const pad = 4;
+      const x = box.x - pad;
+      const y = box.y - pad;
+      const bw = box.w + pad * 2;
+      const bh = box.h + pad * 2;
+      const r = 6;
 
+      // glow
+      ctx.shadowColor = "rgba(255,215,0,0.6)";
+      ctx.shadowBlur = 12;
+      ctx.strokeStyle = `rgba(255,215,0,${0.9 * box.confidence})`;
+      ctx.lineWidth = 2.5;
       ctx.beginPath();
-      ctx.ellipse(cx, cy, rx + 5, ry + 5, 0, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(0,255,200,${0.3 * box.confidence})`;
-      ctx.lineWidth = 9;
+      ctx.roundRect(x, y, bw, bh, r);
       ctx.stroke();
+      ctx.shadowBlur = 0;
 
-      const grad = ctx.createRadialGradient(cx - rx * 0.3, cy - ry * 0.3, rx * 0.05, cx, cy, rx);
-      grad.addColorStop(0, `rgba(255,220,50,${0.14 * box.confidence})`);
-      grad.addColorStop(1, `rgba(255,140,0,${0.05 * box.confidence})`);
+      // fill
+      ctx.fillStyle = `rgba(255,215,0,${0.08 * box.confidence})`;
       ctx.beginPath();
-      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-      ctx.fillStyle = grad;
+      ctx.roundRect(x, y, bw, bh, r);
       ctx.fill();
 
+      // label
+      const label = `#${idx + 1}`;
+      const lw = ctx.measureText(label).width + 14;
+      ctx.fillStyle = "rgba(0,0,0,0.75)";
       ctx.beginPath();
-      ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-      ctx.strokeStyle = `rgba(255,215,0,${0.95 * box.confidence})`;
-      ctx.lineWidth = 2.5;
-      ctx.setLineDash([9, 5]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      const label = `${idx + 1}`;
-      const lw = 26 + label.length * 4;
-      ctx.fillStyle = "rgba(0,0,0,0.65)";
-      ctx.beginPath();
-      ctx.roundRect(cx - lw / 2, cy - 11, lw, 22, 5);
+      ctx.roundRect(x, y - 20, lw, 18, 4);
       ctx.fill();
       ctx.fillStyle = "#FFD700";
-      ctx.font = "bold 13px Montserrat, sans-serif";
-      ctx.textAlign = "center";
+      ctx.font = "bold 11px Montserrat, sans-serif";
+      ctx.textAlign = "left";
       ctx.textBaseline = "middle";
-      ctx.fillText(label, cx, cy + 1);
+      ctx.fillText(label, x + 7, y - 11);
     });
 
     const bannerH = 56;
@@ -137,58 +127,73 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
     const now = Date.now();
 
     boxes.forEach((box, idx) => {
-      const pulse = 0.92 + 0.08 * Math.sin(now * 0.005 + idx);
-      const cx = box.x + box.w / 2;
-      const cy = box.y + box.h / 2;
-      const rx = (box.w / 2) * pulse;
-      const ry = (box.h / 2) * pulse;
+      const pulse = 1 + 0.03 * Math.sin(now * 0.006 + idx);
+      const pad = 4 * pulse;
+      const x = box.x - pad;
+      const y = box.y - pad;
+      const bw = box.w + pad * 2;
+      const bh = box.h + pad * 2;
+      const r = 7;
 
-      octx.beginPath();
-      octx.ellipse(cx, cy, rx + 6, ry + 6, 0, 0, Math.PI * 2);
-      octx.strokeStyle = `rgba(0, 255, 200, ${0.25 * box.confidence})`;
-      octx.lineWidth = 10;
-      octx.stroke();
-
-      const grad = octx.createRadialGradient(cx - rx * 0.3, cy - ry * 0.3, rx * 0.05, cx, cy, rx);
-      grad.addColorStop(0, `rgba(255, 220, 50, ${0.12 * box.confidence})`);
-      grad.addColorStop(1, `rgba(255, 140, 0, ${0.04 * box.confidence})`);
-      octx.beginPath();
-      octx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-      octx.fillStyle = grad;
-      octx.fill();
-
-      octx.beginPath();
-      octx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-      octx.strokeStyle = `rgba(255, 215, 0, ${0.95 * box.confidence})`;
+      // outer glow ring
+      octx.shadowColor = "rgba(255,215,0,0.5)";
+      octx.shadowBlur = 14;
+      octx.strokeStyle = `rgba(255,215,0,${0.85 * box.confidence})`;
       octx.lineWidth = 2.5;
-      octx.setLineDash([9, 5]);
-      octx.lineDashOffset = -(now * 0.06);
+      octx.setLineDash([10, 5]);
+      octx.lineDashOffset = -(now * 0.05);
+      octx.beginPath();
+      octx.roundRect(x, y, bw, bh, r);
       octx.stroke();
       octx.setLineDash([]);
+      octx.shadowBlur = 0;
 
-      const label = `${idx + 1}`;
-      const lw = 26 + label.length * 4;
-      octx.fillStyle = "rgba(0,0,0,0.65)";
+      // subtle fill
+      octx.fillStyle = `rgba(255,215,0,${0.07 * box.confidence})`;
       octx.beginPath();
-      octx.roundRect(cx - lw / 2, cy - 11, lw, 22, 5);
+      octx.roundRect(x, y, bw, bh, r);
+      octx.fill();
+
+      // corner marks
+      const cm = 10;
+      octx.strokeStyle = `rgba(255,255,255,${0.9 * box.confidence})`;
+      octx.lineWidth = 2;
+      octx.setLineDash([]);
+      // TL
+      octx.beginPath(); octx.moveTo(x + r, y); octx.lineTo(x + r + cm, y); octx.moveTo(x, y + r); octx.lineTo(x, y + r + cm); octx.stroke();
+      // TR
+      octx.beginPath(); octx.moveTo(x + bw - r - cm, y); octx.lineTo(x + bw - r, y); octx.moveTo(x + bw, y + r); octx.lineTo(x + bw, y + r + cm); octx.stroke();
+      // BL
+      octx.beginPath(); octx.moveTo(x + r, y + bh); octx.lineTo(x + r + cm, y + bh); octx.moveTo(x, y + bh - r - cm); octx.lineTo(x, y + bh - r); octx.stroke();
+      // BR
+      octx.beginPath(); octx.moveTo(x + bw - r - cm, y + bh); octx.lineTo(x + bw - r, y + bh); octx.moveTo(x + bw, y + bh - r - cm); octx.lineTo(x + bw, y + bh - r); octx.stroke();
+
+      // label badge above box
+      const label = `#${idx + 1}`;
+      const labelW = octx.measureText(label).width + 14;
+      const labelH = 18;
+      const labelX = x;
+      const labelY = Math.max(0, y - labelH - 3);
+      octx.fillStyle = "rgba(0,0,0,0.75)";
+      octx.beginPath();
+      octx.roundRect(labelX, labelY, labelW, labelH, 4);
       octx.fill();
       octx.fillStyle = "#FFD700";
-      octx.font = "bold 13px Montserrat, sans-serif";
-      octx.textAlign = "center";
+      octx.font = "bold 11px Montserrat, sans-serif";
+      octx.textAlign = "left";
       octx.textBaseline = "middle";
-      octx.fillText(label, cx, cy + 1);
+      octx.fillText(label, labelX + 7, labelY + labelH / 2);
 
-      const barW = Math.min(box.w * 0.7, 60);
-      const barX = cx - barW / 2;
-      const barY = box.y + box.h + 6;
-      octx.fillStyle = "rgba(0,0,0,0.4)";
-      octx.beginPath();
-      octx.roundRect(barX, barY, barW, 5, 3);
-      octx.fill();
-      octx.fillStyle = `hsl(${box.confidence * 120}, 100%, 55%)`;
-      octx.beginPath();
-      octx.roundRect(barX, barY, barW * box.confidence, 5, 3);
-      octx.fill();
+      // confidence bar below box
+      if (y + bh + 10 < h) {
+        const barW = Math.min(bw * 0.8, 70);
+        const barX = x + (bw - barW) / 2;
+        const barY = y + bh + 5;
+        octx.fillStyle = "rgba(0,0,0,0.4)";
+        octx.beginPath(); octx.roundRect(barX, barY, barW, 4, 2); octx.fill();
+        octx.fillStyle = `hsl(${box.confidence * 120},100%,55%)`;
+        octx.beginPath(); octx.roundRect(barX, barY, barW * box.confidence, 4, 2); octx.fill();
+      }
     });
   }, []);
 
@@ -204,15 +209,8 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
     const h = video.videoHeight;
     if (!w || !h) { inferringRef.current = false; return; }
 
-    // Only update canvas intrinsic size when video dimensions actually change
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
-    }
-    if (overlay.width !== w || overlay.height !== h) {
-      overlay.width = w;
-      overlay.height = h;
-    }
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    if (overlay.width !== w || overlay.height !== h) { overlay.width = w; overlay.height = h; }
 
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) { inferringRef.current = false; return; }
@@ -267,19 +265,15 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
     };
   }, [isActive, startCamera]);
 
-  // Sync overlay on video metadata load and container resize
   useEffect(() => {
     const video = videoRef.current;
     const container = containerRef.current;
     if (!video || !container) return;
-
     const onMeta = () => syncOverlay();
     video.addEventListener("loadedmetadata", onMeta);
     video.addEventListener("resize", onMeta);
-
     const ro = new ResizeObserver(() => syncOverlay());
     ro.observe(container);
-
     return () => {
       video.removeEventListener("loadedmetadata", onMeta);
       video.removeEventListener("resize", onMeta);
@@ -292,12 +286,10 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
     const canvas = canvasRef.current;
     const overlay = overlayCanvasRef.current;
     if (!video || !canvas || !overlay) return;
-
-    let frameCount = 0;
+    let fc = 0;
     const loop = () => {
       animFrameRef.current = requestAnimationFrame(loop);
-      frameCount++;
-      if (frameCount % 2 !== 0) return;
+      if (++fc % 2 !== 0) return;
       if (video.readyState >= 2) processFrame(video, canvas, overlay);
     };
     animFrameRef.current = requestAnimationFrame(loop);
@@ -308,19 +300,12 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
 
   return (
     <div ref={containerRef} className="relative w-full h-full bg-black overflow-hidden">
-      {/* Video with object-contain so it never gets cropped */}
       <video
         ref={videoRef}
         className="absolute inset-0 w-full h-full object-contain"
-        playsInline
-        muted
-        autoPlay
+        playsInline muted autoPlay
       />
-
-      {/* Hidden processing canvas */}
       <canvas ref={canvasRef} className="hidden" />
-
-      {/* Overlay canvas — same intrinsic size as video, positioned exactly over rendered video area */}
       <canvas
         ref={overlayCanvasRef}
         style={{
@@ -355,6 +340,7 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
         </div>
       )}
 
+      {/* Top bar: status + fps + flip */}
       <div className="absolute top-4 left-4 right-4 flex justify-between items-center z-10">
         <div className="glass-badge flex items-center gap-2 px-4 py-2 rounded-2xl">
           <div className={`w-2.5 h-2.5 rounded-full ${detectedCount > 0 ? "bg-green-400 animate-pulse" : "bg-gray-500"}`} />
@@ -376,22 +362,39 @@ export default function CameraView({ onCoinsDetected, isActive, runInference }: 
       </div>
 
       {shotFlash && (
-        <div className="absolute inset-0 bg-white z-30 pointer-events-none animate-shot-flash" />
+        <div className="absolute inset-0 bg-white z-30 pointer-events-none" style={{ animation: "none", opacity: 0.8 }} />
       )}
 
-      <div className="absolute bottom-0 left-0 right-0 h-36 bg-gradient-to-t from-black/70 to-transparent pointer-events-none" />
+      <div className="absolute bottom-0 left-0 right-0 h-44 bg-gradient-to-t from-black/80 to-transparent pointer-events-none" />
 
-      <div className="absolute bottom-10 left-4 right-4 flex items-center justify-between z-10">
-        {detectedCount > 0 ? (
-          <div className="coin-badge px-4 py-2.5 rounded-3xl flex items-center gap-2">
-            <span className="text-xl">🪙</span>
-            <span className="text-white font-montserrat font-black text-lg">{detectedCount}</span>
-            <span className="text-amber-300 font-montserrat text-xs">монет</span>
-          </div>
-        ) : (
-          <div />
-        )}
+      {/* Bottom controls — raised higher */}
+      <div className="absolute bottom-16 left-4 right-4 flex items-center justify-between z-10">
+        {/* Coin count + reset */}
+        <div className="flex flex-col items-start gap-2">
+          {detectedCount > 0 ? (
+            <div className="coin-badge px-4 py-2.5 rounded-3xl flex items-center gap-2">
+              <span className="text-xl">🪙</span>
+              <span className="text-white font-montserrat font-black text-lg">{detectedCount}</span>
+              <span className="text-amber-300 font-montserrat text-xs">монет</span>
+            </div>
+          ) : (
+            <div className="coin-badge px-4 py-2.5 rounded-3xl flex items-center gap-2 opacity-40">
+              <span className="text-xl">🪙</span>
+              <span className="text-white font-montserrat text-sm">—</span>
+            </div>
+          )}
+          {onResetCount && (
+            <button
+              onClick={onResetCount}
+              className="glass-badge flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-gray-300 hover:text-white transition-colors"
+            >
+              <Icon name="RotateCcw" size={13} />
+              <span className="font-montserrat text-xs">Сбросить</span>
+            </button>
+          )}
+        </div>
 
+        {/* Screenshot button */}
         <button
           onClick={takeScreenshot}
           className="shot-btn w-16 h-16 rounded-full flex items-center justify-center shadow-2xl active:scale-90 transition-transform duration-100"
